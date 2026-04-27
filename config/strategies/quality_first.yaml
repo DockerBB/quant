@@ -1,0 +1,31 @@
+id: "strategy_quality_01"
+name: "质量优先"
+description: |
+  【适合谁】追求确定性、厌恶踩雷的稳健投资者。
+  【怎么选】只看公司"内功"——高ROE、高毛利率、低应计利润（盈利质量高）。
+  配合回购/分红（股息率）验证真金白银，市值因子做规模筛选。
+  【风险】好公司不一定有好价格，可能买在估值高点。
+  【典型持仓】白酒、消费、医药龙头等"核心资产"。
+active: true
+
+universe:
+  exclude_ST: true
+  exclude_new_stock_days: 60
+  min_listing_days: 120
+
+factor_weights:
+  ROE_TTM: 0.30
+  GrossMargin_TTM: 0.25
+  Accruals_Ratio: -0.20
+  DYield: 0.15
+  NetProfit_YoY: 0.10
+
+preprocessing:
+  winsorize_pct: [1, 99]
+  standardize_method: "zscore"
+
+signals:
+  buy_top_pct: 0.15
+  sell_bottom_pct: 0.15
+  max_holdings: 20
+  rebalance: "daily"
