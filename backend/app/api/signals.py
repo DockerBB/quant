@@ -31,16 +31,39 @@ def get_signals(
 
 @router.get("/{strategy_id}/current")
 def get_current_signals(strategy_id: str):
-    latest = read_signals(strategy_id=strategy_id)
-    if latest.empty:
-        return {"date": None, "buys": [], "sells": [], "holds": []}
+    from ..core.database import sqlite_session
 
-    latest_date = latest["date"].max()
-    current = latest[latest["date"] == latest_date]
+    with sqlite_session() as conn:
+        row = conn.execute(
+            "SELECT MAX(date) FROM signals WHERE strategy_id = ?", (strategy_id,)
+        ).fetchone()
+        latest_date = row[0] if row else None
 
-    buys = current[current["signal_type"] == "buy"].to_dict(orient="records")
-    sells = current[current["signal_type"] == "sell"].to_dict(orient="records")
-    holds = current[current["signal_type"] == "hold"].to_dict(orient="records")
+        if not latest_date:
+            return {"date": None, "buys": [], "sells": [], "holds": []}
+
+        # Join with stock_info to get industry
+        rows = conn.execute(
+            """SELECT s.ts_code, s.signal_type, s.score, s.percentile, s.date,
+                      si.industry
+               FROM signals s
+               LEFT JOIN stock_info si ON s.ts_code = si.ts_code
+               WHERE s.strategy_id = ? AND s.date = ?
+               ORDER BY s.score DESC""",
+            (strategy_id, latest_date),
+        ).fetchall()
+
+    buys, sells, holds = [], [], []
+    for r in rows:
+        item = {"ts_code": r["ts_code"], "signal_type": r["signal_type"],
+                "score": r["score"], "percentile": r["percentile"], "date": r["date"],
+                "industry": r["industry"] or ""}
+        if r["signal_type"] == "buy":
+            buys.append(item)
+        elif r["signal_type"] == "sell":
+            sells.append(item)
+        else:
+            holds.append(item)
 
     return {"date": latest_date, "buys": buys, "sells": sells, "holds": holds}
 

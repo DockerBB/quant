@@ -57,6 +57,7 @@ def init_metadata_tables() -> None:
             list_date     TEXT,
             delist_date   TEXT,
             status        TEXT DEFAULT 'normal',
+            asset_type    TEXT DEFAULT 'stock',
             updated_at    TEXT DEFAULT (datetime('now'))
         );
 
@@ -126,3 +127,9 @@ def init_metadata_tables() -> None:
         CREATE INDEX IF NOT EXISTS idx_signals_ts_code ON signals(ts_code);
         CREATE INDEX IF NOT EXISTS idx_daily_update_date ON daily_update_log(date);
         """)
+
+        # Migration: add asset_type column for existing databases
+        try:
+            conn.execute("ALTER TABLE stock_info ADD COLUMN asset_type TEXT DEFAULT 'stock'")
+        except Exception:
+            pass  # Column already exists

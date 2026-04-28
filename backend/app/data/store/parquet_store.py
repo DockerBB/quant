@@ -57,6 +57,14 @@ def write_daily(df: pd.DataFrame) -> int:
         if out_path.exists():
             existing = pd.read_parquet(out_path)
 
+        # Align columns before merge to avoid NaN from schema mismatch
+        all_cols = list(set(existing.columns.tolist() + group.columns.tolist()))
+        for col in all_cols:
+            if col not in existing.columns:
+                existing[col] = None
+            if col not in group.columns:
+                group[col] = None
+
         merged = pd.concat([existing, group], ignore_index=True)
         merged = merged.drop_duplicates(subset=["ts_code", "trade_date"], keep="last")
         merged.sort_values(["trade_date", "ts_code"], inplace=True)
@@ -77,7 +85,20 @@ def read_daily(
         return pd.DataFrame()
 
     parts = []
-    for pq_file in daily_root.rglob("*.parquet"):
+    for pq_file in sorted(daily_root.rglob("*.parquet")):
+        # Skip files outside date range based on filename (YYYY/MM/YYYY-MM.parquet)
+        file_ym = pq_file.stem  # e.g. "2024-01"
+        if start_date and file_ym < start_date[:7]:
+            continue
+        if end_date and file_ym > end_date[:7]:
+            continue
+
+        if ts_codes and columns is None:
+            # Read only the ts_code column first to check relevance
+            code_col = pd.read_parquet(pq_file, columns=["ts_code"])
+            if not any(c in ts_codes for c in code_col["ts_code"].unique()):
+                continue
+
         parts.append(pd.read_parquet(pq_file, columns=columns))
 
     if not parts:

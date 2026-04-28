@@ -19,9 +19,9 @@ def upsert_stock_info(df: pd.DataFrame) -> int:
             d["updated_at"] = datetime.now().isoformat()
             conn.execute(
                 """INSERT OR REPLACE INTO stock_info
-                   (ts_code, symbol, name, area, industry, market, list_date, delist_date, status, updated_at)
+                   (ts_code, symbol, name, area, industry, market, list_date, delist_date, status, asset_type, updated_at)
                    VALUES (:ts_code, :symbol, :name, :area, :industry, :market,
-                           :list_date, :delist_date, :status, :updated_at)""",
+                           :list_date, :delist_date, :status, :asset_type, :updated_at)""",
                 d,
             )
             count += 1
@@ -60,13 +60,23 @@ def write_signals(
     signals: list[dict[str, Any]],
 ) -> int:
     with sqlite_session() as conn:
+        # Remove old signals for this strategy+date before inserting new ones
+        conn.execute(
+            "DELETE FROM signals WHERE strategy_id = ? AND date = ?",
+            (strategy_id, date_str),
+        )
         count = 0
         for s in signals:
             detail = s.get("detail", {})
             conn.execute(
-                """INSERT OR REPLACE INTO signals
+                """INSERT INTO signals
                    (strategy_id, date, ts_code, signal_type, score, percentile, detail_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(strategy_id, date, ts_code) DO UPDATE SET
+                       signal_type=excluded.signal_type,
+                       score=excluded.score,
+                       percentile=excluded.percentile,
+                       detail_json=excluded.detail_json""",
                 (
                     strategy_id,
                     date_str,

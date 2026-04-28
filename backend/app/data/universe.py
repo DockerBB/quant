@@ -47,24 +47,31 @@ def build_universe(
     si["delist_date"] = pd.to_datetime(si["delist_date"], errors="coerce")
     trade_dt = pd.to_datetime(trade_date)
 
+    # Detect ETFs — exempt from ST/delist/new-stock rules
+    if "asset_type" in si.columns:
+        etf_mask = si["asset_type"] == "etf"
+    else:
+        from .fetcher.akshare_fetcher import AkshareFetcher
+        etf_mask = si["ts_code"].apply(AkshareFetcher._is_etf_code)
+
     mask = pd.Series(True, index=si.index)
 
-    # Exclude ST / *ST
+    # Exclude ST / *ST (stocks only, ETFs exempt)
     if exclude_st and "status" in si.columns:
-        mask &= ~si["status"].str.upper().str.contains("ST", na=False)
+        mask &= ~si["status"].str.upper().str.contains("ST", na=False) | etf_mask
 
-    # Exclude delisted
+    # Exclude delisted (stocks only, ETFs exempt)
     if "delist_date" in si.columns:
-        mask &= (si["delist_date"].isna()) | (si["delist_date"] > trade_dt)
+        mask &= (si["delist_date"].isna()) | (si["delist_date"] > trade_dt) | etf_mask
 
-    # Exclude not-yet-listed. If list_date is null, assume listed.
+    # Exclude not-yet-listed (stocks only, ETFs exempt)
     if "list_date" in si.columns:
         known_listed = si["list_date"].isna() | (si["list_date"] <= trade_dt)
-        mask &= known_listed
+        mask &= known_listed | etf_mask
 
-    # Exclude new stocks (< N trading days since listing). Skip if list_date unknown.
+    # Exclude new stocks (stocks only, ETFs exempt)
     if exclude_new_days > 0 and "list_date" in si.columns:
-        listed_mask = si["list_date"].notna()
+        listed_mask = si["list_date"].notna() & ~etf_mask
         if listed_mask.any():
             days_listed = (trade_dt - si["list_date"]).dt.days
             new_mask = listed_mask & (days_listed >= exclude_new_days) | ~listed_mask

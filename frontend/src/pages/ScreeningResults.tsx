@@ -14,6 +14,7 @@ export default function ScreeningResults() {
   const [strategyId, setStrategyId] = useState<string>(activeId);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [selectedRow, setSelectedRow] = useState<string | null>(null);
 
   const { data: signalData, isLoading } = useCurrentSignals(strategyId);
   const nameMap = useStockNameMap();
@@ -77,7 +78,10 @@ export default function ScreeningResults() {
             loading={isLoading}
             size="small"
             pagination={{ pageSize: 20 }}
-            onRow={(record) => ({ onClick: () => navigate(`/signal/${record.ts_code}`), style: { cursor: 'pointer' } })}
+            onRow={(record) => ({
+              onClick: () => { setSelectedRow(record.ts_code); navigate(`/signal/${record.ts_code}`); },
+              style: { cursor: 'pointer', background: selectedRow === record.ts_code ? '#e6f4ff' : undefined },
+            })}
             columns={[
               {
                 title: '类型', dataIndex: 'signal_type', width: 60,
@@ -85,6 +89,8 @@ export default function ScreeningResults() {
               },
               { title: '代码', dataIndex: 'ts_code', width: 100 },
               { title: '名称', dataIndex: 'ts_code', width: 100, render: (c: string) => nameMap[c] || '-' },
+              { title: '行业', dataIndex: 'industry', width: 100, ellipsis: true,
+                render: (v: string) => <span style={{ fontSize: 12, color: '#888' }}>{v || '-'}</span> },
               { title: '综合得分', dataIndex: 'score', width: 110, render: (v: number) => v?.toFixed(4), sorter: (a: Signal, b: Signal) => (a.score || 0) - (b.score || 0) },
               { title: '排名', dataIndex: 'percentile', width: 90, render: (v: number) => v != null ? `${(v * 100).toFixed(1)}%` : '-' },
               { title: '日期', dataIndex: 'date', width: 110 },

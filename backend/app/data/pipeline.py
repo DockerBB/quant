@@ -53,7 +53,11 @@ def refresh_stock_list() -> pd.DataFrame:
         _log_update(datetime.now().strftime("%Y%m%d"), "stock_list", "failed", 0, "Empty result")
         return df
 
-    df["status"] = "normal"
+    # ST detection from name (akshare includes ST/*ST prefix in stock name)
+    # Detect ST/*ST from name prefix (akshare names: "ST某某" or "*ST某某")
+    df["status"] = df["name"].apply(
+        lambda n: "ST" if n and str(n).upper().replace(" ", "").startswith(("*ST", "ST")) else "normal"
+    )
     if "list_date" not in df.columns:
         df["list_date"] = None
     if "delist_date" not in df.columns:
@@ -62,10 +66,22 @@ def refresh_stock_list() -> pd.DataFrame:
         df["area"] = None
     if "industry" not in df.columns:
         df["industry"] = None
+    if "asset_type" not in df.columns:
+        df["asset_type"] = "stock"
     if "market" not in df.columns:
         df["market"] = df["ts_code"].apply(lambda x: "SZ" if ".SZ" in str(x) else "SH")
     if "symbol" not in df.columns:
         df["symbol"] = df["ts_code"].str.split(".").str[0]
+
+    # Preserve existing industry data from previous syncs
+    try:
+        from ..core.database import sqlite_session
+        with sqlite_session() as conn:
+            existing = pd.read_sql_query("SELECT ts_code, industry FROM stock_info", conn)
+        if not existing.empty and "industry" not in df.columns:
+            df = df.merge(existing, on="ts_code", how="left")
+    except Exception:
+        pass
 
     upsert_stock_info(df)
     _log_update(datetime.now().strftime("%Y%m%d"), "stock_list", "success", len(df))
@@ -106,27 +122,92 @@ def refresh_financial_batch(ts_codes: list[str] | None = None) -> int:
 
     if ts_codes is None:
         ts_codes = get_stored_stock_codes()
+
     if not ts_codes:
         _log_update(datetime.now().strftime("%Y%m%d"), "financial", "failed", 0, "No stock codes")
         return 0
 
-    primary = _get_fetcher(settings.PRIMARY_SOURCE)
-    frames = []
+    # Use akshare's batch financial API (东方财富业绩报表) — much faster than per-stock
+    try:
+        import akshare as ak
+        import re
 
-    for ts_code in ts_codes:
-        df = primary.fetch_financial(ts_code, "20100101", datetime.now().strftime("%Y%m%d"))
-        if not df.empty:
-            frames.append(df)
-        time.sleep(0.1)
+        today = datetime.now()
+        current_year = today.year
+        # Fetch last 4 quarters
+        frames = []
+        for year in [current_year, current_year - 1]:
+            for date_str in [f"{year}0331", f"{year}0630", f"{year}0930", f"{year}1231"]:
+                if date_str > today.strftime("%Y%m%d"):
+                    continue
+                try:
+                    df = ak.stock_yjbb_em(date=date_str)
+                    if df is None or df.empty:
+                        continue
+                    # Rename Chinese columns to English
+                    rename = {
+                        "股票代码": "symbol",
+                        "每股收益": "basic_eps",
+                        "营业总收入-营业总收入": "revenue",
+                        "营业总收入-同比增长": "revenue_yoy",
+                        "净利润-净利润": "n_income",
+                        "净利润-同比增长": "netprofit_yoy",
+                        "每股净资产": "bps",
+                        "净资产收益率": "roe",
+                        "销售毛利率": "grossprofit_margin",
+                        "每股经营现金流量": "cash_flow_oper_act",
+                        "所处行业": "industry",
+                        "最新公告日期": "ann_date",
+                    }
+                    df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+                    # Convert symbol to ts_code
+                    def _em_to_ts_code(code):
+                        c = str(code)
+                        if c.startswith(("0", "3")): return f"{c}.SZ"
+                        if c.startswith(("6", "9")): return f"{c}.SH"
+                        if c.startswith(("4", "8", "92")): return f"{c}.BJ"
+                        return c
+                    if "symbol" in df.columns:
+                        df["ts_code"] = df["symbol"].apply(_em_to_ts_code)
+                        df = df.drop(columns=["symbol"])
+                    df["end_date"] = date_str
+                    df["report_type"] = {"0331": "Q1", "0630": "Q2", "0930": "Q3", "1231": "Q4"}.get(date_str[4:], "Q4")
+                    # Filter to A-shares only (include BSE 920xxx.BJ)
+                    df = df[df["ts_code"].str.match(r"^\d{6}\.(SZ|SH|BJ)$")]
+                    frames.append(df)
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"[pipeline] financial batch {date_str} error: {e}")
 
-    if not frames:
-        _log_update(datetime.now().strftime("%Y%m%d"), "financial", "failed", 0, "No data")
+        if not frames:
+            _log_update(today.strftime("%Y%m%d"), "financial", "failed", 0, "No data")
+            return 0
+
+        big = pd.concat(frames, ignore_index=True)
+        # Filter to requested ts_codes if specified
+        if ts_codes:
+            big = big[big["ts_code"].isin(ts_codes)]
+        write_financial(big)
+
+        # Sync industry info to stock_info table
+        if "industry" in big.columns:
+            ind_df = big[big["industry"].notna()][["ts_code", "industry"]].drop_duplicates("ts_code")
+            if not ind_df.empty:
+                from ..core.database import sqlite_session
+                with sqlite_session() as conn:
+                    for _, row in ind_df.iterrows():
+                        conn.execute(
+                            "UPDATE stock_info SET industry = ?, updated_at = ? WHERE ts_code = ?",
+                            (row["industry"], today.isoformat(), row["ts_code"]),
+                        )
+
+        _log_update(today.strftime("%Y%m%d"), "financial", "success", len(big))
+        return len(big)
+
+    except Exception as e:
+        _log_update(datetime.now().strftime("%Y%m%d"), "financial", "failed", 0, str(e))
+        print(f"[pipeline] refresh_financial_batch error: {e}")
         return 0
-
-    big = pd.concat(frames, ignore_index=True)
-    write_financial(big)
-    _log_update(datetime.now().strftime("%Y%m%d"), "financial", "success", len(big))
-    return len(big)
 
 
 def refresh_trade_calendar(start_date: str = "20100101", end_date: str | None = None) -> int:

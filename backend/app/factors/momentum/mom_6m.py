@@ -25,13 +25,17 @@ class MOM_6M(Factor):
         if use_col not in df.columns:
             return pd.Series(dtype=float)
 
-        result = {}
-        for code in universe:
-            sub = df[df["ts_code"] == code].sort_values("trade_date")
-            if len(sub) < self.params["period"] + self.params["skip"]:
-                continue
-            start_price = sub[use_col].iloc[-(self.params["period"] + self.params["skip"])]
-            end_price = sub[use_col].iloc[-self.params["skip"] - 1]
-            if start_price and start_price > 0:
-                result[code] = (end_price / start_price) - 1
-        return pd.Series(result)
+        df = df.sort_values(["ts_code", "trade_date"])
+        p = self.params["period"] + self.params["skip"]  # 147
+        s = self.params["skip"]  # 21
+
+        def _mom(closes):
+            if len(closes) < p:
+                return None
+            start = closes.iloc[-p]
+            end = closes.iloc[-s - 1]
+            if start and start > 0:
+                return (end / start) - 1
+            return None
+
+        return df.groupby("ts_code")[use_col].apply(_mom).dropna()

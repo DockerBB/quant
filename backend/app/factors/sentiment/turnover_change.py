@@ -21,13 +21,17 @@ class TurnoverChange(Factor):
         if df.empty or "turnover_rate" not in df.columns:
             return pd.Series(dtype=float)
 
-        result = {}
-        for code in universe:
-            sub = df[df["ts_code"] == code].sort_values("trade_date")
-            if len(sub) < self.params["long_window"]:
-                continue
-            short_avg = sub["turnover_rate"].tail(self.params["short_window"]).mean()
-            long_avg = sub["turnover_rate"].tail(self.params["long_window"]).mean()
+        df = df.sort_values(["ts_code", "trade_date"])
+        sw = self.params["short_window"]
+        lw = self.params["long_window"]
+
+        def _turn(changes):
+            if len(changes) < lw:
+                return None
+            short_avg = changes.tail(sw).mean()
+            long_avg = changes.tail(lw).mean()
             if long_avg and long_avg > 0:
-                result[code] = (short_avg - long_avg) / long_avg
-        return pd.Series(result)
+                return (short_avg - long_avg) / long_avg
+            return None
+
+        return df.groupby("ts_code")["turnover_rate"].apply(_turn).dropna()

@@ -26,23 +26,17 @@ class RSI_14(Factor):
         if use_col not in df.columns:
             return pd.Series(dtype=float)
 
-        result = {}
-        for code in universe:
-            sub = df[df["ts_code"] == code].sort_values("trade_date")
-            if len(sub) < self.params["window"] + 1:
-                continue
-            closes = sub[use_col]
+        df = df.sort_values(["ts_code", "trade_date"])
+        w = self.params["window"]
+
+        def _rsi(closes):
+            if len(closes) < w + 1:
+                return None
             delta = closes.diff()
-            gains = delta.clip(lower=0)
-            losses = (-delta).clip(lower=0)
-
-            avg_gain = gains.tail(self.params["window"]).mean()
-            avg_loss = losses.tail(self.params["window"]).mean()
-
+            avg_gain = delta.clip(lower=0).tail(w).mean()
+            avg_loss = (-delta).clip(lower=0).tail(w).mean()
             if avg_loss == 0:
-                result[code] = 100.0
-            else:
-                rs = avg_gain / avg_loss
-                result[code] = 100.0 - (100.0 / (1.0 + rs))
+                return 100.0
+            return 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
 
-        return pd.Series(result)
+        return df.groupby("ts_code")[use_col].apply(_rsi).dropna()

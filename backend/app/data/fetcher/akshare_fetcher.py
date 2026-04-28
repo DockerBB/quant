@@ -39,14 +39,44 @@ class AkshareFetcher(DataFetcher):
                 return f"{s}.SZ"
             if s.startswith(("6", "9")):
                 return f"{s}.SH"
+            if s.startswith("92"):                    # BSE new codes (920xxx)
+                return f"{s}.BJ"
             if s.startswith(("4", "8")):
                 return f"{s}.BJ"
+            if s.startswith("5"):
+                return f"{s}.SH"
+            if s.startswith("1"):
+                return f"{s}.SZ"
         return symbol
+
+    @staticmethod
+    def _is_etf_code(ts_code: str) -> bool:
+        """Detect ETF/LOD by ts_code prefix (5=SH-ETF, 1=SZ-ETF/LOF)."""
+        code_num = ts_code.split(".")[0] if "." in ts_code else ts_code
+        return code_num.startswith(("5", "1")) and code_num.isdigit() and len(code_num) == 6
+
+    @staticmethod
+    def _normalize_spot_columns(df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize spot data column names for both stocks and ETFs."""
+        rename = {
+            "代码": "symbol", "名称": "name", "最新价": "close",
+            "涨跌幅": "pct_chg", "涨跌额": "change", "成交量": "vol",
+            "成交额": "amount", "昨收": "pre_close", "换手率": "turnover_rate",
+            "今开": "open", "最高": "high", "最低": "low", "振幅": "amplitude",
+            "市盈率-动态": "pe", "市净率": "pb", "总市值": "total_mv", "流通市值": "circ_mv",
+            "开盘价": "open", "最高价": "high", "最低价": "low",
+        }
+        return df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
 
     def fetch_daily(
         self, ts_code: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
         symbol = self._normalize_code(ts_code)
+
+        # Route ETF codes to ETF-specific daily API
+        if self._is_etf_code(ts_code):
+            return self._fetch_etf_daily(symbol, start_date, end_date)
+
         try:
             df = ak.stock_zh_a_hist(
                 symbol=symbol,
@@ -79,51 +109,123 @@ class AkshareFetcher(DataFetcher):
             print(f"[akshare] fetch_daily error for {ts_code}: {e}")
             return pd.DataFrame()
 
-    def fetch_all_daily(self, trade_date: str) -> pd.DataFrame:
-        """Fetch snapshot for all stocks on a given date using stock_zh_a_spot."""
+    def _fetch_etf_daily(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """Fetch single ETF daily OHLCV using fund_etf_hist_em."""
         try:
-            df = ak.stock_zh_a_spot()
+            df = ak.fund_etf_hist_em(
+                symbol=symbol,
+                period="daily",
+                start_date=start_date.replace("-", ""),
+                end_date=end_date.replace("-", ""),
+                adjust="",
+            )
             if df is None or df.empty:
                 return pd.DataFrame()
             df = df.rename(columns={
-                "代码": "symbol",
-                "名称": "name",
-                "最新价": "close",
-                "涨跌幅": "pct_chg",
-                "涨跌额": "change",
-                "成交量": "vol",
-                "成交额": "amount",
-                "振幅": "amplitude",
-                "最高": "high",
-                "最低": "low",
-                "今开": "open",
-                "昨收": "pre_close",
-                "换手率": "turnover_rate",
-                "市盈率-动态": "pe",
-                "市净率": "pb",
-                "总市值": "total_mv",
-                "流通市值": "circ_mv",
+                "日期": "trade_date", "开盘": "open", "收盘": "close",
+                "最高": "high", "最低": "low", "成交量": "vol",
+                "成交额": "amount", "振幅": "amplitude", "涨跌幅": "pct_chg",
+                "涨跌额": "change", "换手率": "turnover_rate",
             })
-            df["ts_code"] = df["symbol"].apply(self._to_ts_code)
-            df["trade_date"] = trade_date
+            df["ts_code"] = self._to_ts_code(symbol)
+            df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d")
             keep = ["ts_code", "trade_date", "open", "high", "low", "close",
-                    "pre_close", "pct_chg", "change", "vol", "amount", "turnover_rate"]
+                    "vol", "amount", "pct_chg", "change", "turnover_rate"]
             return df[[c for c in keep if c in df.columns]]
         except Exception as e:
-            print(f"[akshare] fetch_all_daily error: {e}")
+            print(f"[akshare] fetch_etf_daily error for {symbol}: {e}")
+            return pd.DataFrame()
+
+    def fetch_all_daily(self, trade_date: str) -> pd.DataFrame:
+        """Fetch snapshot for all stocks + ETFs on a given date."""
+        frames = []
+
+        # 1. Stock snapshots
+        try:
+            stock_df = ak.stock_zh_a_spot()
+            if stock_df is not None and not stock_df.empty:
+                stock_df = self._normalize_spot_columns(stock_df)
+                stock_df["ts_code"] = stock_df["symbol"].apply(self._to_ts_code)
+                stock_df["trade_date"] = trade_date
+                frames.append(stock_df)
+        except Exception as e:
+            print(f"[akshare] fetch_all_daily stock error: {e}")
+
+        # 2. BSE stock snapshots
+        try:
+            bse_df = ak.stock_bj_a_spot_em()
+            if bse_df is not None and not bse_df.empty:
+                bse_df = self._normalize_spot_columns(bse_df)
+                bse_df["ts_code"] = bse_df["symbol"].apply(self._to_ts_code)
+                bse_df["trade_date"] = trade_date
+                frames.append(bse_df)
+        except Exception as e:
+            print(f"[akshare] fetch_all_daily bse error: {e}")
+
+        # 3. ETF snapshots
+        try:
+            etf_df = ak.fund_etf_spot_em()
+            if etf_df is not None and not etf_df.empty:
+                etf_df = self._normalize_spot_columns(etf_df)
+                etf_df["ts_code"] = etf_df["symbol"].apply(self._to_ts_code)
+                etf_df["trade_date"] = trade_date
+                frames.append(etf_df)
+        except Exception as e:
+            print(f"[akshare] fetch_all_daily etf error: {e}")
+
+        if not frames:
+            return pd.DataFrame()
+
+        result = pd.concat(frames, ignore_index=True)
+
+        # ETF spot data lacks OHLC/vol — fill from available close data
+        etf_flag = result["ts_code"].apply(self._is_etf_code)
+        if etf_flag.any() and "close" in result.columns:
+            for col in ["open", "high", "low"]:
+                if col in result.columns:
+                    result.loc[etf_flag & result[col].isna(), col] = result.loc[etf_flag, "close"]
+            if "vol" in result.columns:
+                result.loc[etf_flag & result["vol"].isna(), "vol"] = 1
+
+        keep = ["ts_code", "trade_date", "open", "high", "low", "close",
+                "pre_close", "pct_chg", "change", "vol", "amount", "turnover_rate"]
+        return result[[c for c in keep if c in result.columns]]
+
+    def fetch_etf_list(self) -> pd.DataFrame:
+        """Fetch ETF list using akshare fund_etf_spot_em."""
+        try:
+            df = ak.fund_etf_spot_em()
+            if df is None or df.empty:
+                return pd.DataFrame()
+            df = df.rename(columns={"代码": "symbol", "名称": "name"})
+            df["ts_code"] = df["symbol"].apply(self._to_ts_code)
+            return df[["ts_code", "name"]]
+        except Exception as e:
+            print(f"[akshare] fetch_etf_list error: {e}")
             return pd.DataFrame()
 
     def fetch_stock_list(self) -> pd.DataFrame:
         try:
             df = ak.stock_info_a_code_name()
             if df is None or df.empty:
-                return pd.DataFrame()
-            df = df.rename(columns={"code": "ts_code", "name": "name"})
-            df["ts_code"] = df["ts_code"].apply(self._to_ts_code)
-            return df[["ts_code", "name"]]
+                df = pd.DataFrame()
+            else:
+                df = df.rename(columns={"code": "ts_code", "name": "name"})
+                df["ts_code"] = df["ts_code"].apply(self._to_ts_code)
+                df = df[["ts_code", "name"]]
         except Exception as e:
             print(f"[akshare] fetch_stock_list error: {e}")
-            return pd.DataFrame()
+            df = pd.DataFrame()
+
+        df["asset_type"] = "stock"
+
+        # Append ETFs
+        etf_df = self.fetch_etf_list()
+        if not etf_df.empty:
+            etf_df["asset_type"] = "etf"
+            df = pd.concat([df, etf_df], ignore_index=True)
+
+        return df[["ts_code", "name", "asset_type"]]
 
     def fetch_financial(
         self, ts_code: str, start_date: str, end_date: str

@@ -25,7 +25,6 @@ class Settings(BaseSettings):
     # Storage paths
     DAILY_DIR: Path = DATA_DIR / "parquet" / "daily"
     FINANCIAL_DIR: Path = DATA_DIR / "financial"
-    SIGNAL_DIR: Path = DATA_DIR / "signals"
 
     # Data quality
     MAX_MISSING_PCT: float = 0.20         # max missing rate per stock
@@ -63,7 +62,7 @@ class Settings(BaseSettings):
         return cls(**values)
 
     def ensure_dirs(self) -> None:
-        for path in [self.DATA_DIR, self.DAILY_DIR, self.FINANCIAL_DIR, self.SIGNAL_DIR]:
+        for path in [self.DATA_DIR, self.DAILY_DIR, self.FINANCIAL_DIR]:
             path.mkdir(parents=True, exist_ok=True)
 
 

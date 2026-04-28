@@ -12,7 +12,9 @@ type IndicatorType = 'volume' | 'rsi' | 'macd';
 export default function SignalDetail() {
   const { tsCode } = useParams<{ tsCode: string }>();
   const navigate = useNavigate();
-  const { data: dailyData, isLoading } = useDailyData(tsCode || '');
+  // Only fetch last 2 years of data for faster loading
+  const startDate = `${new Date().getFullYear() - 1}0101`;
+  const { data: dailyData, isLoading } = useDailyData(tsCode || '', startDate);
   const nameMap = useStockNameMap();
   const [indicator, setIndicator] = useState<IndicatorType>('volume');
 

@@ -136,8 +136,8 @@ def run_strategy(strategy_id: str, req: StrategyRunRequest | None = None):
                 "signals_count": 0, "buy_count": 0, "sell_count": 0, "status": "empty_universe"}
 
     # --- Data Loading ---
-    # Load enough history for all factors (max: Residual_Momentum ~252 trading days)
-    lookback_days = 420
+    # Max needed: MOM_6M ~147 trading days ≈ 210 calendar days. Use 250 for safety.
+    lookback_days = 250
     start_dt = datetime.strptime(trade_date, "%Y%m%d") - timedelta(days=lookback_days)
     start_date = start_dt.strftime("%Y%m%d")
 

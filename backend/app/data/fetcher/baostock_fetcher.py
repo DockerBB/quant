@@ -122,7 +122,9 @@ class BaostockFetcher(DataFetcher):
 
             df = pd.DataFrame(rows, columns=["ts_code", "name", "ipoDate", "outDate", "type", "status"])
             df["ts_code"] = df["ts_code"].apply(self._to_ts_code)
-            return df[df["type"] == "1"][["ts_code", "name"]]
+            df = df[df["type"].isin(["1", "5"])]
+            df["asset_type"] = df["type"].apply(lambda t: "stock" if t == "1" else "etf")
+            return df[["ts_code", "name", "asset_type"]]
         except Exception as e:
             print(f"[baostock] fetch_stock_list error: {e}")
             return pd.DataFrame()

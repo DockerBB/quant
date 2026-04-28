@@ -66,6 +66,10 @@ def get_daily(
     )
     if df.empty:
         return []
+
+    # Replace NaN/Inf with None for JSON compliance
+    import numpy as np
+    df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
     return df.to_dict(orient="records")
 
 
@@ -74,6 +78,9 @@ def get_financial(ts_code: str, end_date: str | None = Query(None)):
     df = read_financial(ts_codes=[ts_code], end_date=end_date)
     if df.empty:
         return []
+
+    import numpy as np
+    df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
     return df.to_dict(orient="records")
 
 
