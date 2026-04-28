@@ -73,13 +73,17 @@ def refresh_stock_list() -> pd.DataFrame:
     if "symbol" not in df.columns:
         df["symbol"] = df["ts_code"].str.split(".").str[0]
 
-    # Preserve existing industry data from previous syncs
+    # Sync industry from financial Parquet (survives stock list refreshes)
     try:
-        from ..core.database import sqlite_session
-        with sqlite_session() as conn:
-            existing = pd.read_sql_query("SELECT ts_code, industry FROM stock_info", conn)
-        if not existing.empty and "industry" not in df.columns:
-            df = df.merge(existing, on="ts_code", how="left")
+        from .store.parquet_store import read_financial
+        fin = read_financial()
+        if not fin.empty and "industry" in fin.columns:
+            ind = fin[fin["industry"].notna()].sort_values("end_date").groupby("ts_code").last().reset_index()
+            ind = ind[["ts_code", "industry"]]
+            # Drop existing industry column to avoid _x/_y suffix from merge
+            if "industry" in df.columns:
+                df = df.drop(columns=["industry"])
+            df = df.merge(ind, on="ts_code", how="left")
     except Exception:
         pass
 
